@@ -1,5 +1,5 @@
 import numpy as np
-import torch 
+import torch
 import opt_einsum
 import numqi
 
@@ -9,16 +9,17 @@ def inner_product(matA, matB):
 def hilbert_schmidt_norm(matA):
     return np.sqrt(inner_product(matA, matA)).real
 
-class Hilbert_Schmidt_Measure(torch.nn.Module):
-    def __init__(self, dim_list, rank, num_ensemble):
+class HilbertSchmidtMeasure(torch.nn.Module):
+    def __init__(self, dim_list, rank, num_ensemble, dtype=torch.complex128):
         super().__init__()
+        assert dtype in {torch.float64, torch.complex128}
         # schmidt/tensor rank
         self.rank = rank
         self.num_ensemble = num_ensemble
         dim_list = tuple(int(x) for x in dim_list)
         self.dim_list = dim_list
         self.manifold_psi = torch.nn.ModuleList([numqi.manifold.Sphere(x,
-                batch_size=num_ensemble*rank, dtype=torch.complex128) for x in dim_list])
+                batch_size=num_ensemble*rank, dtype=dtype) for x in dim_list])
         self.target_rho = None
         N0 = len(dim_list)
         self.manifold_ensemble_coeff = numqi.manifold.DiscreteProbability(num_ensemble, dtype=torch.float64)
@@ -57,7 +58,7 @@ class Hilbert_Schmidt_Measure(torch.nn.Module):
             psi_coeff = psi_coeff / torch.sqrt(norm_list.real.reshape(-1,1))
             psi = self.contract_psi(psi_coeff, *psi_list).reshape(num_ensemble, -1)
         else:
-            psi_list = [x() for x in self.manifold_psi]
+            psi_list = [x().to(torch.complex128) for x in self.manifold_psi]
             psi = self.contract_psi(*psi_list).reshape(num_ensemble, -1)
         sigma = (psi.T * coeff_q) @ psi.conj()
         tmp0 = (sigma - self.target_rho).reshape(-1)
