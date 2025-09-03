@@ -10,14 +10,19 @@ np_rng = np.random.default_rng()
 
 
 rho_bes = numqi.entangle.load_upb('tiles', return_bes=True)[1]
+alpha = 0.9
+
+model = HilbertSchmidtMeasure(dim_list=[3,3], rank=1, num_ensemble=18, dtype=torch.float64)
+model.set_target_rho(numqi.utils.hf_interpolate_dm(rho_bes, alpha=alpha))
+theta_optim = numqi.optimize.minimize(model, num_repeat=30, tol=1e-14, print_every_round=0)
+info_best = model(return_info=True)[1]
 
 model = HilbertSchmidtMeasure(dim_list=[3,3], rank=1, num_ensemble=10, dtype=torch.float64)
-model.set_target_rho(rho_bes)
-# model.set_target_rho(numqi.utils.hf_interpolate_dm(rho_bes, alpha=0.89))
+model.set_target_rho(numqi.utils.hf_interpolate_dm(rho_bes, alpha=alpha))
 theta_optim = numqi.optimize.minimize(model, num_repeat=30, tol=1e-14, print_every_round=0)
 info = model(return_info=True)[1]
-# print(model.num_ensemble, info['distance'], abs(info['distance']-0.04345491259706978)) #0.04345491259706978
-if abs(info['distance']-0.04345491259706978)< 1e-11:
+print(f'p={alpha}')
+if abs(info['distance']-info_best['distance'])< 1e-11:
     # theta_optim = numqi.optimize.minimize(model, theta_optim.x, num_repeat=1, tol=1e-20, print_freq=10)
     tmp0 = model.manifold_ensemble_coeff().detach().numpy()
     tmp1 = [x().detach().numpy() for x in model.manifold_psi]
@@ -27,7 +32,8 @@ if abs(info['distance']-0.04345491259706978)< 1e-11:
     coeff_psi = [x[ind0] for x in tmp1]
     coeff_psi_pretty = np.concat([coeff_psi[0], 0*coeff_psi[0][:,:1], coeff_psi[1]], axis=1)
     print(coeff_p, coeff_psi_pretty, sep='\n')
-
+else:
+    print(abs(info['distance']-info_best['distance']))
 
 
 # tmp0 = info['sigma']
