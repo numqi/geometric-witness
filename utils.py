@@ -1,11 +1,11 @@
+import itertools
+import functools
 import numpy as np
 import torch
 import opt_einsum
 import numqi
-from itertools import combinations
-from functools import reduce
 import operator
-from scipy.linalg import sqrtm
+import scipy.linalg
 
 def depolarizing_channel(rho, p):
     dim = rho.shape[0]
@@ -19,9 +19,9 @@ def hilbert_schmidt_norm(matA):
 
 def density_matrix_fidelity(rho, sigma):
     """Compute the fidelity between two density matrices."""
-    sqrt_rho = sqrtm(rho)
+    sqrt_rho = scipy.linalg.sqrtm(rho)
     middle_matrix = sqrt_rho @ sigma @ sqrt_rho
-    sqrt_middle = sqrtm(middle_matrix)
+    sqrt_middle = scipy.linalg.sqrtm(middle_matrix)
     tmp = np.trace(sqrt_middle)
     return np.real(tmp)**2
 
@@ -89,22 +89,23 @@ class HilbertSchmidtMeasure(torch.nn.Module):
             info = dict(distance=distance, sigma=sigma, witness=witness)
             ret = loss, info
         return ret
-    
+
 def generate_bipartitions(n):
     systems = list(range(n))
-    bipartitions = set()  
+    bipartitions = set()
     for i in range(1, n // 2 + 1):
-        for group1 in combinations(systems, i):
-            group1 = list(group1) 
+        for group1 in itertools.combinations(systems, i):
+            group1 = list(group1)
             group2 = [x for x in systems if x not in group1]
             group1, group2 = sorted(group1), sorted(group2)
             bipartitions.add(frozenset([tuple(group1), tuple(group2)]))
     result = [sorted(map(list, partition), key=lambda x: x[0]) for partition in bipartitions]
     return sorted(result, key=lambda x: x[0])
-    
+
 class GenuineHilbertSchmidtMeasure(torch.nn.Module):
-    def __init__(self, dim_list, num_ensemble, distance='hs', dtype=torch.complex128):
+    def __init__(self, dim_list, num_ensemble, distance:str='hs', dtype=torch.complex128):
         super().__init__()
+        assert distance in {'hs','trace','fidelity'}
         self.dim_list = dim_list
         self.num_ensemble = num_ensemble
         self.target_rho = None
@@ -115,8 +116,8 @@ class GenuineHilbertSchmidtMeasure(torch.nn.Module):
         manifold_psiA_list = torch.nn.ModuleList()
         manifold_psiB_list = torch.nn.ModuleList()
         for bipartition in bipartition_list:
-            dimA = reduce(operator.mul, (dim_list[i] for i in bipartition[0]))
-            dimB = reduce(operator.mul, (dim_list[i] for i in bipartition[1]))
+            dimA = functools.reduce(operator.mul, (dim_list[i] for i in bipartition[0]))
+            dimB = functools.reduce(operator.mul, (dim_list[i] for i in bipartition[1]))
             manifold_psiA_list.append(numqi.manifold.Sphere(dimA, batch_size=num_ensemble, dtype=dtype))
             manifold_psiB_list.append(numqi.manifold.Sphere(dimB, batch_size=num_ensemble, dtype=dtype))
         self.manifold_psiA_list = manifold_psiA_list
@@ -135,12 +136,15 @@ class GenuineHilbertSchmidtMeasure(torch.nn.Module):
 
         self.contract_psi = contract_psi
 
-    def set_target_rho(self, np0):
+    def set_target_rho(self, np0, zero_eps:float=1e-10):
         assert (np0.ndim==2) and (np0.shape[0]==np0.shape[1]) and (np0.shape[0]==np.prod(self.dim_list))
-        assert np.abs(np0-np0.T.conj()).max() < 1e-10
+        assert np.abs(np0-np0.T.conj()).max() < zero_eps
+        assert abs(np.trace(np0)-1) < zero_eps
+        EVL,EVC = np.linalg.eigh(np0)
+        assert EVL[0]>-zero_eps
+        tmp0 = EVL>zero_eps
+        self._sqrt_rho = torch.tensor(np.sqrt(EVL[tmp0]).reshape(-1,1)*EVC.T.conj()[tmp0], dtype=torch.complex128)
         self.target_rho = torch.tensor(np0, dtype=torch.complex128)
-        if self.distance == 'fidelity':
-            self.sqrt_rho = torch.tensor(sqrtm(np0), dtype=torch.complex128)
 
     def forward(self,return_info=False):
         coeff_q = self.manifold_ensemble_coeff().to(torch.complex128)
@@ -157,25 +161,22 @@ class GenuineHilbertSchmidtMeasure(torch.nn.Module):
         sigma = (psi_AB.T * coeff_q) @ psi_AB.conj()
         if self.distance == 'hs':
             tmp0 = (sigma - self.target_rho).reshape(-1)
-            loss = torch.vdot(tmp0, tmp0).real
-            ret = loss
+            ret = torch.vdot(tmp0, tmp0).real
         elif self.distance == 'trace':
-            diff = sigma - self.target_rho
-            singular_values = torch.linalg.svdvals(diff)
-            loss = 0.5*torch.sum(singular_values).real
-            ret = loss
+            ret = 0.5*torch.linalg.svdvals(sigma - self.target_rho).sum()
         else:
-            raise ValueError(f'distance={self.distance} is not supported')
+            ret = 1-torch.sqrt(torch.linalg.svdvals(self._sqrt_rho @ sigma @ self._sqrt_rho.T.conj())).sum()**2
         if return_info:
             sigma = sigma.detach().numpy()
             rho = self.target_rho.numpy()
             witness = ((sigma-rho)-inner_product(sigma, sigma-rho)*np.identity(sigma.shape[0]))/hilbert_schmidt_norm(sigma-rho)
-            distance = np.sqrt(loss.detach().numpy())
+            tmp0 = np.maximum(ret.item(),0)
+            distance = np.sqrt(np.sqrt(tmp0) if (self.distance=='hs') else tmp0)
             info = dict(distance=distance, sigma=sigma, witness=witness)
-            ret = loss, info
+            ret = ret, info
         return ret
-    
-    
+
+
 def get_grid_state(edge_list:list[list[tuple[int,int]]], dimA:int|None=None, dimB:int|None=None)->np.ndarray:
     '''create a grid state with given edge_list
 
