@@ -26,6 +26,13 @@ def density_matrix_fidelity(rho, sigma):
     return np.real(tmp)**2
 
 class HilbertSchmidtMeasure(torch.nn.Module):
+    '''
+    dim_list: list of subsystem dimensions
+    rank: rank limit for extreme points
+    num_ensemble: number of extreme points in the ensemble
+
+    returns the minimum squared Hilbert-Schmidt distance between target_rho and the states with bounded rank
+    '''
     def __init__(self, dim_list, rank, num_ensemble, dtype=torch.complex128):
         super().__init__()
         assert dtype in {torch.float64, torch.complex128}
@@ -104,6 +111,11 @@ def generate_bipartitions(n):
     return sorted(result, key=lambda x: x[0])
 
 class GenuineHilbertSchmidtMeasure(torch.nn.Module):
+    '''
+    dim_list: list of subsystem dimensions
+    num_ensemble: number of extreme points in the ensemble
+    returns the minimum squared Hilbert-Schmidt distance between target_rho and the biseparable states
+    '''
     def __init__(self, dim_list, num_ensemble, dtype=torch.complex128):
         super().__init__()
         self.dim_list = dim_list
@@ -166,7 +178,7 @@ class GenuineHilbertSchmidtMeasure(torch.nn.Module):
             info = dict(distance=distance, sigma=sigma, witness=witness, threshold=threshold)
             ret = loss, info
         return ret
-    
+
 def horodecki_state(b):
     state_01 = np.kron(np.eye(3)[0], np.eye(3)[1])  # |01>
     state_12 = np.kron(np.eye(3)[1], np.eye(3)[2])  # |12>
